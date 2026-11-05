@@ -31,9 +31,9 @@ const FURNITURE_ZONES = [
 
 export async function detectPositionalXR(): Promise<boolean> {
   if (!window.isSecureContext) return false;
-  const xr = (navigator as XRNavigator).xr;
-  if (!xr) return false;
   try {
+    const xr = (navigator as XRNavigator).xr;
+    if (!xr) return false;
     return await xr.isSessionSupported('immersive-ar');
   } catch {
     return false;
