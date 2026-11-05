@@ -65,6 +65,76 @@
 .inspection-tools button,.gramophone-inspect{border:1px solid #dcc29b70;border-radius:18px;background:#765638;color:#fff7e9;padding:8px 12px;font:600 11px 'DM Sans';cursor:pointer}
 .inspection-tools button:hover,.gramophone-inspect:hover{background:#97714a}
 .is-inspecting .panorama-tools{display:none}
+
+/* Compact, expandable 360° controls. The office stays visible until details are requested. */
+.panorama-tools{top:88px;left:50%;display:block;width:max-content;max-width:calc(100vw - 28px);padding:5px;border:1px solid #d7c5a94a;border-radius:18px;background:rgba(19,18,17,.78);box-shadow:0 8px 28px #0006;backdrop-filter:blur(18px);white-space:normal}
+.panorama-toolbar-main{display:flex;align-items:center;gap:4px;min-width:0}
+.panorama-mode-switch{display:flex;flex:0 1 auto;gap:2px;min-width:0;padding:3px;border:1px solid #ffffff20;border-radius:14px;background:#07070742}
+.panorama-tools .panorama-toolbar-main button{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 9px;border:1px solid transparent;border-radius:12px;background:transparent;color:#e9e1d7;font:500 11px 'DM Sans';white-space:nowrap}
+.panorama-tools .panorama-mode-switch button{flex:1 1 auto;min-width:54px;min-height:44px;padding:0 11px;border-radius:11px;font-size:11px}
+.panorama-tools .panorama-mode-switch button.selected{border-color:#ddc6a550;background:linear-gradient(145deg,#e6d7c5,#c7ae91);color:#241d17;box-shadow:0 2px 8px #0003}
+.panorama-tools .panorama-toolbar-main .panorama-icon-button,.panorama-tools .panorama-toolbar-main .panorama-expand-button{flex:0 0 44px;width:44px;min-width:44px;padding:0;border-color:#ffffff24;background:#ffffff0b;color:#f1e8dc}
+.panorama-tools .panorama-toolbar-main button:hover{background-color:#ffffff16}
+.is-inspecting:not(.physical-walk-active) .panorama-tools{display:none}
+.panorama-tools .panorama-toolbar-main .panorama-expand-button svg{transition:transform .18s ease}
+.panorama-tools .panorama-toolbar-main .panorama-expand-button.is-open svg{transform:rotate(180deg)}
+.panorama-compact-status{display:flex;align-items:center;gap:8px;min-width:0;margin:3px 2px 0;padding:4px 6px 1px;border-top:1px solid #ffffff16;color:#e3d9cb;font-size:10px;line-height:1.35}
+.panorama-compact-status>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panorama-compact-status.is-live>span:before{content:'';display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:#83d2a4;box-shadow:0 0 7px #83d2a455}
+.panorama-tools .panorama-compact-status button{flex:0 0 auto;min-width:52px;min-height:34px;padding:0 9px;border:1px solid #d9c7aa44;border-radius:11px;background:#e5d5bf18;color:#f3e7d5;font:500 10px 'DM Sans'}
+.panorama-details{position:absolute;top:calc(100% + 9px);right:0;width:min(440px,calc(100vw - 28px));max-height:min(48vh,440px);overflow:auto;padding:18px 20px;border:1px solid #d7c5a94a;border-radius:18px;background:rgba(20,19,18,.94);box-shadow:0 16px 45px #0009;backdrop-filter:blur(20px);color:#f4eee5;white-space:normal}
+.panorama-details h2{margin:0 30px 9px 0;font:600 15px 'Space Grotesk';letter-spacing:.15px;color:#f1dfc8}
+.panorama-details p{margin:0 0 9px;color:#d9d1c7;font:400 12px/1.5 'DM Sans'}
+.panorama-details small{display:block;color:#bdb3a7;font:400 10px/1.5 'DM Sans'}
+.panorama-details a{color:#f2d8b2;text-underline-offset:2px}
+.panorama-details button{min-height:40px;padding:8px 12px;border:1px solid #ffffff30;border-radius:13px;background:#ffffff10;color:#f6eee3;font:500 11px 'DM Sans'}
+.panorama-details button:disabled{opacity:.55;cursor:wait}
+.panorama-detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}
+.panorama-details .panorama-primary-action{border-color:#e3d0b4;background:linear-gradient(145deg,#eadcc9,#cdb494);color:#241d17;font-weight:600}
+.panorama-safety-copy{color:#edcfaa!important}
+.panorama-detail-note{padding:8px 10px;border:1px solid #ffffff19;border-radius:10px;background:#ffffff08}
+.panorama-webxr-info{margin-top:14px;padding-top:12px;border-top:1px solid #ffffff1b}
+.panorama-webxr-info strong{display:block;margin-bottom:6px;color:#e9dac5;font-size:11px}
+.panorama-webxr-info button{margin-top:2px}
+.panorama-collapse-link{display:block!important;margin:12px 0 0 auto!important;min-height:36px!important;border-color:transparent!important;background:transparent!important;color:#d5c6b2!important}
+.panorama-dev-diagnostics{display:grid;gap:5px;margin-top:14px;padding-top:12px;border-top:1px solid #ffffff1b;font:10px/1.4 'DM Sans';overflow-wrap:anywhere}
+.panorama-dev-diagnostics b{color:#efd7b1}
+.panorama-dev-diagnostics>span{color:#e3ddd5}
+.panorama-dev-diagnostics .walk-debug-panel{position:static;display:grid;gap:4px;width:auto;max-height:180px;transform:none;padding:8px;border:0;border-radius:8px;background:#0003;box-shadow:none}
+.walk-production-diagnostics{position:absolute;z-index:12;right:0;bottom:calc(100% + 8px);width:min(430px,calc(100vw - 20px));max-height:min(58vh,480px);overflow:auto;padding:14px;border:1px solid #d7c5a966;border-radius:16px;background:rgba(20,19,18,.96);box-shadow:0 18px 48px #000b;backdrop-filter:blur(20px);color:#f4eee5;white-space:normal}
+.walk-production-diagnostics-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;color:#f1dfc8;font:600 13px 'Space Grotesk'}
+.walk-production-diagnostics-head button,.walk-diagnostics-copy{min-height:36px;padding:6px 10px;border:1px solid #d7c5a955;border-radius:10px;background:#ffffff10;color:#f3e8da;font:500 10px 'DM Sans'}
+.walk-production-diagnostics dl{display:grid;gap:5px;margin:0;font:10px/1.4 'DM Sans'}
+.walk-production-diagnostics dl>div{display:grid;grid-template-columns:minmax(112px,.8fr) minmax(0,1.5fr);gap:8px;padding:5px 0;border-bottom:1px solid #ffffff12}
+.walk-production-diagnostics dt{color:#bfb5a9}.walk-production-diagnostics dd{margin:0;overflow-wrap:anywhere;color:#f2ede5}
+.walk-production-diagnostics p,.walk-production-diagnostics>small{color:#d6cec4;font:11px/1.5 'DM Sans'}
+.walk-diagnostics-copy{margin-top:9px;color:#f4dfc1}
+.physical-walk-active .panorama-tools.is-physical-walk{top:88px;bottom:auto;padding:5px;background:rgba(19,18,17,.78)}
+@media(max-width:767px){
+  .panorama-tools,.physical-walk-active .panorama-tools.is-physical-walk{top:auto;bottom:calc(82px + env(safe-area-inset-bottom));left:50%;width:calc(100vw - 20px);max-width:430px;transform:translateX(-50%);padding:5px;border-radius:16px}
+  .panorama-toolbar-main{gap:3px}
+  .panorama-mode-switch{flex:1 1 auto;min-width:0}
+  .panorama-tools .panorama-mode-switch button{flex:1 1 0;min-width:0;min-height:44px;padding:0 5px;font-size:10px}
+  .panorama-tools .panorama-toolbar-main .panorama-icon-button,.panorama-tools .panorama-toolbar-main .panorama-expand-button{flex-basis:44px;width:44px;min-width:44px;min-height:44px}
+  .panorama-compact-status{font-size:9px}
+  .panorama-details{top:auto;right:auto;bottom:calc(100% + 8px);left:50%;width:100%;max-height:min(46svh,380px);transform:translateX(-50%);padding:15px 16px}
+  .panorama-details h2{font-size:14px}
+  .panorama-details p{font-size:11px}
+  .panorama-details small{font-size:9px}
+}
+@media(max-width:360px){
+  .panorama-tools,.physical-walk-active .panorama-tools.is-physical-walk{width:calc(100vw - 16px);padding:4px}
+  .panorama-toolbar-main{gap:2px}
+  .panorama-tools .panorama-toolbar-main .panorama-icon-button,.panorama-tools .panorama-toolbar-main .panorama-expand-button{flex-basis:44px;width:44px;min-width:44px}
+  .panorama-tools .panorama-mode-switch button{padding:0 3px;font-size:9px}
+  .panorama-compact-status{gap:5px;padding-right:3px;padding-left:3px}
+  .panorama-tools .panorama-compact-status button{min-width:46px}
+}
+@media(max-width:767px){.walk-production-diagnostics{right:50%;width:calc(100vw - 20px);max-height:min(54svh,440px);transform:translateX(50%);padding:12px}.walk-production-diagnostics dl{font-size:9px}.walk-production-diagnostics dl>div{grid-template-columns:minmax(100px,.75fr) minmax(0,1.5fr);gap:6px}}
+@media(max-width:767px) and (orientation:landscape){
+  .panorama-tools,.physical-walk-active .panorama-tools.is-physical-walk{bottom:calc(64px + env(safe-area-inset-bottom))}
+  .panorama-details{max-height:min(50svh,230px)}
+}
 .is-inspecting nav{opacity:.5;pointer-events:none}
 .is-inspecting .wall-controls,.is-inspecting .mobile-home{display:none}
 .is-inspecting header{opacity:.45;pointer-events:none}

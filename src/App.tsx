@@ -2,7 +2,7 @@ import { Canvas } from '@react-three/fiber';
 import { ContactShadows, Environment, RoundedBox, Text } from '@react-three/drei';
 import { Component, Suspense, lazy, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { ArrowRight, Code2, GraduationCap, Grid2X2, Home, Info, Layers, Mail, Orbit, User, Volume2, VolumeX } from 'lucide-react';
+import { ArrowRight, ChevronDown, Code2, GraduationCap, Grid2X2, Home, Layers, Mail, Orbit, RotateCcw, User, Volume2, VolumeX, X } from 'lucide-react';
 import { projects } from './data/projects';
 import { useEnvironment, useExperience } from './store';
 import { useFrame, useThree } from '@react-three/fiber';
@@ -622,6 +622,8 @@ export default function App() {
   const [mobileMode, setMobileMode] = useState<'welcome' | 'exploring'>('welcome');
   const [activeWall, setActiveWall] = useState(cameraControl.wallIndex);
   const [panoramaActive, setPanoramaActive] = useState(cameraControl.mode === 'panorama360');
+  const [panoramaControlsExpanded, setPanoramaControlsExpanded] = useState(false);
+  const [walkPreflightOpen, setWalkPreflightOpen] = useState(false);
   const [panoramaInput, setPanoramaInput] = useState<'touch' | 'motion'>('touch');
   const [motionStatus, setMotionStatus] = useState('');
   const [positionalXRSupport, setPositionalXRSupport] = useState<'checking'|'supported'|'unsupported'>('checking');
@@ -635,8 +637,8 @@ export default function App() {
   const [physicalWalkActive, setPhysicalWalkActive] = useState(false);
   const [physicalWalkStatus, setPhysicalWalkStatus] = useState('Ready when you are in a clear area.');
   const [physicalWalkError, setPhysicalWalkError] = useState('');
-  const [walkInfoOpen, setWalkInfoOpen] = useState(false);
   const [walkDiagnosticsOpen, setWalkDiagnosticsOpen] = useState(false);
+  const [walkDiagnosticsCopied, setWalkDiagnosticsCopied] = useState(false);
   const [walkDiagnostics, setWalkDiagnostics] = useState<PhysicalWalkDiagnostics|null>(null);
   const physicalWalkBridge = useRef<PhysicalWalkBridge|null>(null);
   const physicalWalkEnterStarted = useRef(false);
@@ -655,12 +657,21 @@ export default function App() {
   const inspectionReturn = useRef<InspectionReturn|null>(null);
   const [musicMessage, setMusicMessage] = useState('Music coming soon · licensed instrumental asset not supplied.');
   const mobileExploring = mobileMode === 'exploring';
+  const walkDebugEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('walkDebug') === '1';
+  const canShowWalkDiagnostics = walkDebugEnabled || import.meta.env.DEV;
+  const walkClientClass = (() => {
+    const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+    const browser = /SamsungBrowser\//.test(ua) ? 'Samsung Internet' : /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Other';
+    const device = /Android/i.test(ua) ? 'Android device' : /iPad/i.test(ua) ? 'iPad' : /iPhone|iPod/i.test(ua) ? 'iPhone' : /Windows/i.test(ua) ? 'Windows device' : /Macintosh|Mac OS/i.test(ua) ? 'Mac device' : /Linux/i.test(ua) ? 'Linux device' : 'Unknown device class';
+    return `${browser} · ${device}`;
+  })();
+  const compactMotionStatus = motionStatus && !motionStatus.startsWith('Waiting for phone movement') ? motionStatus : '';
 
-  const handlePhysicalWalkError = (message:string) => {
+  const handlePhysicalWalkError = (_message:string) => {
     physicalWalkEnterStarted.current=false;
     setPhysicalWalkPermissionsGranted(false);
     cameraControl.physicalWalkActive=false;
-    setPhysicalWalkError(message);
+    setPhysicalWalkError('Physical Walk could not start. Try Again or return to Touch Mode.');
     setPhysicalWalkDriveRequested(false);
     setPhysicalWalkActive(false);
     setPhysicalWalkStatus('Physical Walk unavailable; 360° Motion remains available.');
@@ -678,7 +689,11 @@ export default function App() {
   };
   const handlePhysicalWalkStatus = (status:string) => {
     setPhysicalWalkStatus(status);
-    if (status.startsWith('Tracking normally')) setWalkInfoOpen(false);
+    if (status.startsWith('Tracking normally')) setPanoramaControlsExpanded(false);
+  };
+  const handlePositionalXRActiveChange = (active:boolean) => {
+    setPositionalXRActive(active);
+    if(active)setPanoramaControlsExpanded(false);
   };
   const startPhysicalWalk = (permissionsAlreadyGranted = false) => {
     if (!panoramaActive || view !== 'home' || positionalXRActive || inspectionTarget) {
@@ -686,6 +701,8 @@ export default function App() {
       return;
     }
     setPhysicalWalkError('');
+    setWalkPreflightOpen(false);
+    setPanoramaControlsExpanded(false);
     physicalWalkEnterStarted.current=false;
     setPhysicalWalkBridgeReady(false);
     setPhysicalWalkPermissionsGranted(permissionsAlreadyGranted);
@@ -984,6 +1001,8 @@ export default function App() {
     setView('home');
     if (window.innerWidth < 768) setMobileMode('exploring');
     setPanoramaActive(true);
+    setPanoramaControlsExpanded(false);
+    setWalkPreflightOpen(false);
   };
   const exitPanorama = () => {
     if (cameraControl.mode !== 'panorama360') return;
@@ -995,6 +1014,8 @@ export default function App() {
     cameraControl.panoramaInput='touch';
     setPanoramaInput('touch');
     setPanoramaActive(false);
+    setPanoramaControlsExpanded(false);
+    setWalkPreflightOpen(false);
     goToWall(cameraControl.wallIndex);
   };
   const selectTouchMode = () => {
@@ -1007,9 +1028,13 @@ export default function App() {
     cameraControl.panoramaPitch=MathUtils.clamp(currentEuler.x,-75*Math.PI/180,75*Math.PI/180);
     setPanoramaInput('touch');
     setMotionStatus('');
+    setWalkPreflightOpen(false);
+    setPanoramaControlsExpanded(false);
   };
   const selectMotionMode = async () => {
     if (!panoramaActive || view !== 'home') return;
+    setWalkPreflightOpen(false);
+    setPanoramaControlsExpanded(false);
     if (physicalWalkDriveRequested) void exitPhysicalWalk();
     const requestId=++motionRequest.current;
     if (!window.isSecureContext) {
@@ -1214,7 +1239,7 @@ export default function App() {
   return <main className={`${inspectionTarget?'is-inspecting':''} ${positionalXRActive?'positional-ar-active':''} ${physicalWalkActive?'physical-walk-active':''}`}>
     {inspectionTarget && <div className="inspection-tools"><span>Close inspection · {inspectionTarget==='about'?'About Me':inspectionTarget==='deaim'?'De-Aim':inspectionTarget==='hmlnd'?'HMLND':inspectionTarget==='rear'?'Other Work':inspectionTarget==='desk'?'Executive Desk':'Gramophone'}</span>{panoramaActive&&panoramaInput==='motion'&&<div className="guided-walk-controls" aria-label="Guided camera movement"><button onClick={moveCloser} disabled={inspectionWalkStep==='closer'}>Move Closer</button><button onClick={stepBack} disabled={inspectionWalkStep==='center'}>Step Back</button><button onClick={closeInspection}>Return to Center</button></div>}{!(panoramaActive&&panoramaInput==='motion')&&<button onClick={closeInspection}>Back to {cameraControl.mode==='panorama360'?'360° View':'Wall View'}</button>}</div>}
     {musicInteracted && <button className="gramophone-inspect" onClick={()=>focusInspection('gramophone')}>Inspect gramophone</button>}
-    <div className={`scene ${mobileExploring?'exploring':''} ${panoramaActive?'panorama':''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}><SceneErrorBoundary><Canvas frameloop={physicalWalkDriveRequested?'never':'always'} shadows={!physicalWalkDriveRequested} gl={{alpha:true}} camera={{ position:[0,1.1,3.5], fov:72 }} dpr={[1,1.35]}><Scene gramophonePlaying={gramophonePlaying} gramophoneAudioAvailable={gramophoneAudioAvailable} onToggleGramophone={toggleGramophone} onInspect={focusInspection} xrActive={positionalXRActive} xrBridge={positionalXRBridge} onXRBridgeReady={setPositionalXRBridgeReady} onXRActiveChange={setPositionalXRActive} onXRError={setPositionalXRError} physicalWalkRequested={physicalWalkDriveRequested} physicalWalkSuspended={view!=='home'} physicalWalkBridge={physicalWalkBridge} onPhysicalWalkBridgeReady={handlePhysicalWalkBridgeReady} onPhysicalWalkStatus={handlePhysicalWalkStatus} onPhysicalWalkError={handlePhysicalWalkError} onPhysicalWalkActiveChange={handlePhysicalWalkActiveChange} onPhysicalWalkDiagnostics={setWalkDiagnostics} physicalWalkDiagnosticsEnabled={import.meta.env.DEV&&walkDiagnosticsOpen}/></Canvas></SceneErrorBoundary><div className="scene-label"><span>●</span> SPATIAL STUDIO</div></div>
+    <div className={`scene ${mobileExploring?'exploring':''} ${panoramaActive?'panorama':''}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}><SceneErrorBoundary><Canvas frameloop={physicalWalkDriveRequested?'never':'always'} shadows={!physicalWalkDriveRequested} gl={{alpha:true}} camera={{ position:[0,1.1,3.5], fov:72 }} dpr={[1,1.35]}><Scene gramophonePlaying={gramophonePlaying} gramophoneAudioAvailable={gramophoneAudioAvailable} onToggleGramophone={toggleGramophone} onInspect={focusInspection} xrActive={positionalXRActive} xrBridge={positionalXRBridge} onXRBridgeReady={setPositionalXRBridgeReady} onXRActiveChange={handlePositionalXRActiveChange} onXRError={setPositionalXRError} physicalWalkRequested={physicalWalkDriveRequested} physicalWalkSuspended={view!=='home'} physicalWalkBridge={physicalWalkBridge} onPhysicalWalkBridgeReady={handlePhysicalWalkBridgeReady} onPhysicalWalkStatus={handlePhysicalWalkStatus} onPhysicalWalkError={handlePhysicalWalkError} onPhysicalWalkActiveChange={handlePhysicalWalkActiveChange} onPhysicalWalkDiagnostics={setWalkDiagnostics} physicalWalkDiagnosticsEnabled={walkDebugEnabled||import.meta.env.DEV&&walkDiagnosticsOpen}/></Canvas></SceneErrorBoundary><div className="scene-label"><span>●</span> SPATIAL STUDIO</div></div>
     <header><a className="brand" onClick={() => {if(panoramaActive)exitPanorama();setView('home')}}><b>EO</b><span><strong>Emmanuel Owiredu</strong><small>Spatial Developer Portfolio</small></span></a><div className="status">●　Immersive Experience</div><button className="panorama-pill" onClick={panoramaActive?exitPanorama:enterPanorama} aria-label={panoramaActive?'Exit 360 degree view':'Enter 360 degree view'}><Orbit size={16}/>{panoramaActive?'Exit 360°':'360° View'}</button></header>
     {view === 'home' && !panoramaActive && <section className="landing-panels" aria-label="Featured portfolio panels">
       <article className="card deaim" onClick={() => setView('deaim')}><div className="project-head"><div className="symbol"><GraduationCap/></div><div><h2>De-Aim</h2><span>School Management System</span></div><ArrowRight className="arrow"/></div><div className="preview"><div className="preview-side">DE-AIM<br/><br/>Dashboard<br/>Students<br/>Attendance<br/>Finance</div><div className="dash"><small>OVERVIEW · SAMPLE DATA</small><div className="stats"><b>40<small>Students</small></b><b>6<small>Teachers</small></b><b>8<small>Classes</small></b></div><strong>Attendance this week</strong><div className="bars"><i/><i/><i/><i/><i/><i/></div></div></div><small className="tag">EDUCATION PLATFORM · CONCEPT PREVIEW</small></article>
@@ -1238,66 +1263,105 @@ export default function App() {
         <p>{view === 'projects' ? 'Select a floating project card to explore its concept preview.' : view==='contact' ? 'Contact details will be added here.' : 'This portfolio section is being prepared.'}</p>
       </>}
     </section>}
-    {panoramaActive && (view==='home'||physicalWalkDriveRequested) && <div className="panorama-tools" aria-label="360 degree viewing controls">
-      {!positionalXRActive&&<>
-      {physicalWalkDriveRequested&&physicalWalkActive ? <>
-        <span className={`walk-live-status ${physicalWalkStatus.startsWith('Tracking normally')?'is-live':physicalWalkStatus.startsWith('Movement blocked')?'is-blocked':'is-limited'}`} role="status" aria-live="polite"><i aria-hidden="true"/> {physicalWalkStatus}</span>
-        {physicalWalkStatus.includes('Try Again')&&<button onClick={()=>void retryPhysicalWalk()}>Try Again</button>}
-        <button onClick={()=>physicalWalkBridge.current?.recenter()}>Recenter</button>
-        {!physicalWalkStatus.startsWith('Tracking normally')&&<button onClick={async()=>{await exitPhysicalWalk();selectTouchMode();}}>Return to Touch Mode</button>}
-        <button onClick={()=>void exitPhysicalWalk()}>Exit Walk</button>
-        <button className="walk-info-tab" aria-expanded={walkInfoOpen} aria-controls="walk-info-panel" onClick={()=>setWalkInfoOpen(value=>!value)}><Info size={15}/> Walk Info</button>
-        {import.meta.env.DEV&&<button className="walk-debug-toggle" aria-expanded={walkDiagnosticsOpen} onClick={()=>setWalkDiagnosticsOpen(value=>!value)}>Stats</button>}
-        {walkInfoOpen&&<section id="walk-info-panel" className="walk-info-panel" aria-label="Physical Walk camera and safety information">
-          <button className="walk-info-close" onClick={()=>setWalkInfoOpen(false)} aria-label="Collapse Walk Info">×</button>
-          <strong>Camera & safety</strong>
-          <p>The rear camera is used by visual tracking only; its live image is not shown. The virtual office hides real obstacles. Stay in a clear area, keep your route unobstructed, and exit immediately if you feel unsafe.</p>
-          <small>This product includes XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. The engine is provided as-is without warranties. Spatial Studio is independent and not endorsed by Niantic Spatial. <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noreferrer">XR Engine License Agreement</a>.</small>
-        </section>}
-        {import.meta.env.DEV&&walkDiagnosticsOpen&&walkDiagnostics&&<section className="walk-debug-panel" aria-label="Physical Walk performance diagnostics">
-          <b>XR8 loaded: {walkDiagnostics.engineLoaded?'yes':'no'} · Camera stream: {walkDiagnostics.cameraStreamInitialized?'yes':'no'} ({walkDiagnostics.cameraStatus})</b>
-          <span>{walkDiagnostics.fps.toFixed(0)} R3F FPS · {walkDiagnostics.trackingHz.toFixed(0)} accepted pose Hz · {walkDiagnostics.xrFrameCount} XR8 updates</span>
-          <span>XR8: {walkDiagnostics.trackingStatus}{walkDiagnostics.trackingReason?` · ${walkDiagnostics.trackingReason}`:''} · Origin: {walkDiagnostics.originReady?'yes':'no'} · Accepted: {walkDiagnostics.poseAccepted?'yes':'no'}</span>
-          <span>Raw pose age: {Number.isFinite(walkDiagnostics.rawPoseAgeMs)?walkDiagnostics.rawPoseAgeMs.toFixed(0):'—'} ms · Accepted pose age: {Number.isFinite(walkDiagnostics.poseAgeMs)?walkDiagnostics.poseAgeMs.toFixed(0):'—'} ms</span>
-          <span>App state: {walkDiagnostics.trackingState} · Reject: {walkDiagnostics.poseRejectionReason||'none'} · Recovery: {walkDiagnostics.recoveryState}</span>
-          <span>Collision: {walkDiagnostics.collisionConstrained?'constrained':'clear'} · Loop: {walkDiagnostics.renderLoop}</span>
-          <span>Raw quaternion: {walkDiagnostics.rawOrientation?.map(value=>value.toFixed(3)).join(', ')??'—'}</span>
-          <span>State seconds: {Object.entries(walkDiagnostics.stateSeconds).map(([name,seconds])=>`${name} ${seconds}s`).join(' · ')||'—'}</span>
-          <span>Rejected frames: {Object.entries(walkDiagnostics.rejectedFrames).map(([name,count])=>`${name} ${count}`).join(' · ')||'0'}</span>
-          <span>Raw XYZ: {walkDiagnostics.rawPosition?.map(value=>value.toFixed(2)).join(', ')??'—'}</span>
-          <span>Applied XYZ: {walkDiagnostics.appliedPosition.map(value=>value.toFixed(2)).join(', ')}</span>
-        </section>}
-      </> : <>
-        <span className="panorama-indicator"><Orbit size={15}/> 360° VIEW</span>
-        <div className="panorama-mode-switch" role="group" aria-label="Camera control mode"><button className={!physicalWalkDriveRequested&&panoramaInput==='touch'?'selected':''} aria-pressed={!physicalWalkDriveRequested&&panoramaInput==='touch'} onClick={selectTouchMode}>Touch</button><button className={!physicalWalkDriveRequested&&panoramaInput==='motion'?'selected':''} aria-pressed={!physicalWalkDriveRequested&&panoramaInput==='motion'} onClick={selectMotionMode}>Motion</button><button className={physicalWalkDriveRequested?'selected':''} aria-pressed={physicalWalkDriveRequested} onClick={()=>startPhysicalWalk()} disabled={physicalWalkDriveRequested||positionalXRActive||!!inspectionTarget}>{physicalWalkDriveRequested?'Starting…':'Physical Walk'}</button></div>
-        {physicalWalkDriveRequested&&<small className="motion-status" role="status" aria-live="polite">{physicalWalkStatus}</small>}
-        {physicalWalkDriveRequested&&physicalWalkStatus.includes('Try Again')&&<button onClick={()=>void retryPhysicalWalk()}>Try Again</button>}
-        {physicalWalkDriveRequested&&import.meta.env.DEV&&<button className="walk-debug-toggle" aria-expanded={walkDiagnosticsOpen} onClick={()=>setWalkDiagnosticsOpen(value=>!value)}>Stats</button>}
-        {physicalWalkDriveRequested&&import.meta.env.DEV&&walkDiagnosticsOpen&&walkDiagnostics&&<section className="walk-debug-panel" aria-label="Physical Walk startup diagnostics">
-          <b>XR8 loaded: {walkDiagnostics.engineLoaded?'yes':'no'} · Camera stream: {walkDiagnostics.cameraStreamInitialized?'yes':'no'} ({walkDiagnostics.cameraStatus})</b>
-          <span>XR8 updates: {walkDiagnostics.xrFrameCount} · State: {walkDiagnostics.trackingStatus}{walkDiagnostics.trackingReason?` · ${walkDiagnostics.trackingReason}`:''}</span>
-          <span>Raw pose age: {Number.isFinite(walkDiagnostics.rawPoseAgeMs)?walkDiagnostics.rawPoseAgeMs.toFixed(0):'—'} ms · Accepted age: {Number.isFinite(walkDiagnostics.poseAgeMs)?walkDiagnostics.poseAgeMs.toFixed(0):'—'} ms</span>
-          <span>Origin: {walkDiagnostics.originReady?'established':'waiting'} · Accepted: {walkDiagnostics.poseAccepted?'yes':'no'} · Reject: {walkDiagnostics.poseRejectionReason||'none'}</span>
-          <span>Raw XYZ: {walkDiagnostics.rawPosition?.map(value=>value.toFixed(3)).join(', ')??'—'}</span>
-          <span>Raw quaternion: {walkDiagnostics.rawOrientation?.map(value=>value.toFixed(3)).join(', ')??'—'}</span>
-          <span>R3F: {walkDiagnostics.fps.toFixed(0)} FPS · Collision: {walkDiagnostics.collisionConstrained?'constrained':'clear'} · {walkDiagnostics.recoveryState}</span>
-        </section>}
-        <small className="xr-safety-banner">Physical Walk requests rear-camera access for tracking only. It does not show real obstacles; start only in a clear, safe area.</small>
-        <small>{panoramaInput==='motion'?'Move your phone to look around':'Drag to look around'}</small>
-        <button onClick={physicalWalkDriveRequested?()=>void exitPhysicalWalk():recenter}>{physicalWalkDriveRequested?'Cancel':'Recenter'}</button>
-        <button onClick={exitPanorama}>Exit 360°</button>
-      </>}
-      </>}
-      {positionalXRActive ? <>
-        <small className="xr-safety-banner" role="status">Camera passthrough is active. The virtual room hides real obstacles; use a clear area.</small>
-        <button onClick={recenterPositionalXR}>Recenter / Calibrate</button><button onClick={exitPositionalXR}>Exit Positional AR</button>
-      </> : physicalWalkDriveRequested ? null : positionalXRSupport==='supported' ? <>
-        <small className="xr-safety-banner">Positional AR uses camera passthrough. Use a clear area; this room does not show real obstacles.</small>
-        <button onClick={enterPositionalXR} disabled={!positionalXRBridgeReady}>Experimental Positional AR</button>
-      </> : positionalXRSupport==='checking' ? <small className="motion-status" role="status">Checking positional tracking support…</small> : <small className="motion-status" role="status">Positional tracking is unsupported on this device/browser. 360° Motion remains available.</small>}
-      {positionalXRError&&<small className="motion-status" role="status" aria-live="polite">{positionalXRError}</small>}
-      {physicalWalkError&&<><small className="motion-status" role="status" aria-live="polite">{physicalWalkError}</small><button onClick={()=>void retryPhysicalWalk()}>Try Again</button><button onClick={()=>{setPhysicalWalkError('');selectTouchMode();}}>Return to Touch Mode</button></>}
-      {motionStatus&&<small className="motion-status" role="status" aria-live="polite">{motionStatus}</small>}
+    {panoramaActive && (view==='home'||physicalWalkDriveRequested) && <div className={`panorama-tools ${panoramaControlsExpanded?'is-expanded':''} ${physicalWalkActive?'is-physical-walk':''}`} aria-label="360 degree viewing controls">
+      <div className="panorama-toolbar-main">
+        <div className="panorama-mode-switch" role="group" aria-label="Camera control mode">
+          <button className={!physicalWalkDriveRequested&&!positionalXRActive&&panoramaInput==='touch'?'selected':''} aria-pressed={!physicalWalkDriveRequested&&!positionalXRActive&&panoramaInput==='touch'} onClick={selectTouchMode} disabled={positionalXRActive}>Touch</button>
+          <button className={!physicalWalkDriveRequested&&!positionalXRActive&&panoramaInput==='motion'?'selected':''} aria-pressed={!physicalWalkDriveRequested&&!positionalXRActive&&panoramaInput==='motion'} onClick={()=>void selectMotionMode()} disabled={positionalXRActive}>Motion</button>
+          <button className={physicalWalkDriveRequested||walkPreflightOpen?'selected':''} aria-label="Physical Walk" aria-pressed={physicalWalkDriveRequested||walkPreflightOpen} onClick={()=>{if(physicalWalkDriveRequested){setPanoramaControlsExpanded(true);return;}setWalkPreflightOpen(true);setPanoramaControlsExpanded(true);}} disabled={positionalXRActive||!!inspectionTarget}>Walk</button>
+        </div>
+        <button className="panorama-icon-button" aria-label="Recenter view" title="Recenter" onClick={positionalXRActive?recenterPositionalXR:physicalWalkDriveRequested?()=>physicalWalkBridge.current?.recenter():recenter}><RotateCcw size={16}/></button>
+        <button className="panorama-icon-button" aria-label={positionalXRActive?'Exit Positional AR':physicalWalkDriveRequested?'Exit Physical Walk':'Exit 360 degree view'} title={positionalXRActive?'Exit AR':physicalWalkDriveRequested?'Exit Walk':'Exit 360°'} onClick={()=>{if(positionalXRActive)exitPositionalXR();else if(physicalWalkDriveRequested)selectTouchMode();else exitPanorama();}}><X size={17}/></button>
+        <button className={`panorama-expand-button ${panoramaControlsExpanded?'is-open':''}`} aria-label={panoramaControlsExpanded?'Collapse 360 view information':'Expand 360 view information'} aria-expanded={panoramaControlsExpanded} aria-controls="panorama-details" onClick={()=>setPanoramaControlsExpanded(value=>!value)}><ChevronDown size={17}/></button>
+      </div>
+      {(physicalWalkDriveRequested||physicalWalkError||compactMotionStatus||positionalXRError||positionalXRActive)&&<div className={`panorama-compact-status ${physicalWalkActive&&physicalWalkStatus.startsWith('Tracking normally')?'is-live':''}`} role="status" aria-live="polite">
+        <span title={physicalWalkDriveRequested?physicalWalkStatus:physicalWalkError||positionalXRError||compactMotionStatus}>{positionalXRActive?'WebXR camera passthrough active':physicalWalkDriveRequested?physicalWalkStatus:physicalWalkError||positionalXRError||compactMotionStatus}</span>
+        {(physicalWalkStatus.includes('Try Again')||!!physicalWalkError)&&<button onClick={()=>void retryPhysicalWalk()}>Retry</button>}
+        {physicalWalkDriveRequested&&!physicalWalkActive&&!physicalWalkStatus.includes('Try Again')&&<button onClick={()=>void exitPhysicalWalk()}>Cancel</button>}
+        {(physicalWalkDriveRequested||!!physicalWalkError)&&canShowWalkDiagnostics&&<button onClick={()=>setWalkDiagnosticsOpen(value=>!value)} aria-expanded={walkDiagnosticsOpen}>Walk Diagnostics</button>}
+      </div>}
+      {(physicalWalkDriveRequested||!!physicalWalkError)&&canShowWalkDiagnostics&&walkDiagnosticsOpen&&<section className="walk-production-diagnostics" aria-label="Walk Diagnostics">
+        <div className="walk-production-diagnostics-head"><strong>Walk Diagnostics</strong><button onClick={()=>setWalkDiagnosticsOpen(false)} aria-label="Collapse Walk Diagnostics">Close</button></div>
+        {walkDiagnostics ? <>
+          <dl>
+            <div><dt>XR8 script loaded</dt><dd>{walkDiagnostics.engineLoaded?'Yes':'No'} · version {walkDiagnostics.engineVersion}</dd></div>
+            <div><dt>Pipeline API / canvas</dt><dd>{walkDiagnostics.pipelineApiCompatible?'compatible':'not confirmed'} · canvas {walkDiagnostics.canvasConnected?'connected':'detached'} · WebGL {walkDiagnostics.webglContextStatus}</dd></div>
+            <div><dt>Latest successful stage</dt><dd>{walkDiagnostics.latestSuccessfulStage} · {Math.round(walkDiagnostics.stageAgeMs/1000)}s ago</dd></div>
+            <div><dt>Camera status</dt><dd>{walkDiagnostics.cameraStatus}{walkDiagnostics.cameraFailureReason?` · ${walkDiagnostics.cameraFailureReason}`:''}</dd></div>
+            <div><dt>Camera / tracking canvas</dt><dd>{walkDiagnostics.videoDimensions} / {walkDiagnostics.pipelineCanvasDimensions} · XR8 projection {walkDiagnostics.projectionCalibrated?'synchronized':'not synchronized'}</dd></div>
+            <div><dt>XR8 pipeline callbacks</dt><dd>{walkDiagnostics.pipelineCallbackCount?'Yes':'No'} · {walkDiagnostics.pipelineCallbackCount} received · onUpdate {walkDiagnostics.onUpdateCount}</dd></div>
+            <div><dt>processCpuResult.reality</dt><dd>{walkDiagnostics.realityPresent?'Present':'Missing'}</dd></div>
+            <div><dt>Tracking</dt><dd>{walkDiagnostics.trackingStatus}{walkDiagnostics.trackingReason?` · ${walkDiagnostics.trackingReason}`:''}</dd></div>
+            <div><dt>Tracking frames / time</dt><dd>{Object.entries(walkDiagnostics.trackingFrameCounts).map(([state,count])=>`${state} ${count}`).join(' · ')||'No tracking states received'} · {Object.entries(walkDiagnostics.trackingStateDurationsSeconds).map(([state,seconds])=>`${state} ${seconds.toFixed(1)}s`).join(' · ')}</dd></div>
+            <div><dt>Status transitions</dt><dd>{Object.entries(walkDiagnostics.trackingTransitions).map(([transition,count])=>`${transition} ×${count}`).join(' · ')||'No transitions yet'}</dd></div>
+            <div><dt>Raw pose present / finite</dt><dd>{walkDiagnostics.rawPosition?'Present':'Missing'} / {walkDiagnostics.rawPoseFinite?'Yes':'No'}{walkDiagnostics.rawPosition?` · ${walkDiagnostics.rawPosition.map(value=>value.toFixed(3)).join(', ')}`:''}</dd></div>
+            <div><dt>Origin / accepted</dt><dd>{walkDiagnostics.originReady?'Established':'Not established'} / {walkDiagnostics.poseAccepted?'Yes':'No'}{walkDiagnostics.poseRejectionReason?` · ${walkDiagnostics.poseRejectionReason}`:''}</dd></div>
+            <div><dt>Camera application</dt><dd>{walkDiagnostics.renderedPoseCount} camera updates · {walkDiagnostics.collisionConstrained?'collision constrained':'not constrained'} · {walkDiagnostics.appliedPosition.map(value=>value.toFixed(2)).join(', ')}</dd></div>
+            <div><dt>Engine exception</dt><dd>{walkDiagnostics.engineException||'None reported'}</dd></div>
+            <div><dt>Browser / device class</dt><dd>{walkClientClass}</dd></div>
+          </dl>
+          <button className="walk-diagnostics-copy" onClick={async()=>{
+            const lines=[
+              'Spatial Studio Physical Walk diagnostics',
+              `XR8 script loaded: ${walkDiagnostics.engineLoaded?'yes':'no'}`,
+              `XR8 version: ${walkDiagnostics.engineVersion}`,
+              `Pipeline API compatible: ${walkDiagnostics.pipelineApiCompatible?'yes':'not confirmed'}; canvas connected: ${walkDiagnostics.canvasConnected?'yes':'no'}; WebGL: ${walkDiagnostics.webglContextStatus}`,
+              `Latest successful stage: ${walkDiagnostics.latestSuccessfulStage} (${Math.round(walkDiagnostics.stageAgeMs/1000)}s ago)`,
+              `Camera status: ${walkDiagnostics.cameraStatus}`,
+              `Camera / pipeline canvas dimensions: ${walkDiagnostics.videoDimensions} / ${walkDiagnostics.pipelineCanvasDimensions}`,
+              `XR8 projection synchronized: ${walkDiagnostics.projectionCalibrated?'yes':'no'}`,
+              `Camera failure reason: ${walkDiagnostics.cameraFailureReason||'none reported'}`,
+              `Pipeline callbacks: ${walkDiagnostics.pipelineCallbackCount}; onUpdate: ${walkDiagnostics.onUpdateCount}`,
+              `processCpuResult.reality: ${walkDiagnostics.realityPresent?'present':'missing'}`,
+              `Tracking: ${walkDiagnostics.trackingStatus}; reason: ${walkDiagnostics.trackingReason||'none'}`,
+              `Tracking frames by status: ${Object.entries(walkDiagnostics.trackingFrameCounts).map(([state,count])=>`${state} ${count}`).join('; ')||'none'}`,
+              `Tracking state/reason durations: ${Object.entries(walkDiagnostics.trackingStateDurationsSeconds).map(([state,seconds])=>`${state} ${seconds.toFixed(1)}s`).join('; ')||'none'}`,
+              `Tracking transitions: ${Object.entries(walkDiagnostics.trackingTransitions).map(([transition,count])=>`${transition} x${count}`).join('; ')||'none'}`,
+              `Raw finite pose: ${walkDiagnostics.rawPoseFinite?'yes':'no'}; XYZ: ${walkDiagnostics.rawPosition?.map(value=>value.toFixed(3)).join(', ')||'unavailable'}`,
+              `Origin established: ${walkDiagnostics.originReady?'yes':'no'}; pose accepted: ${walkDiagnostics.poseAccepted?'yes':'no'}; rejection: ${walkDiagnostics.poseRejectionReason||'none'}`,
+              `R3F camera updates: ${walkDiagnostics.renderedPoseCount}; collision constrained: ${walkDiagnostics.collisionConstrained?'yes':'no'}; applied XYZ: ${walkDiagnostics.appliedPosition.map(value=>value.toFixed(2)).join(', ')}`,
+              `Engine exception: ${walkDiagnostics.engineException||'none reported'}`,
+              `Browser/device class: ${walkClientClass}`,
+            ].join('\n');
+            try { await navigator.clipboard.writeText(lines); setWalkDiagnosticsCopied(true); window.setTimeout(()=>setWalkDiagnosticsCopied(false),1800); }
+            catch { setWalkDiagnosticsCopied(false); }
+          }}>{walkDiagnosticsCopied?'Copied':'Copy Diagnostics'}</button>
+          {!navigator.clipboard&&<small>Clipboard access requires HTTPS and browser support.</small>}
+        </> : <p>Waiting for XR8 startup diagnostics…</p>}
+      </section>}
+      {panoramaControlsExpanded&&<section id="panorama-details" className="panorama-details" aria-label="360 degree viewing information">
+        {walkPreflightOpen&&!physicalWalkDriveRequested ? <>
+          <h2>Physical Walk</h2>
+          <p>Physical Walk needs rear-camera access for visual tracking. Camera imagery is used for tracking and is not shown as the office background.</p>
+          <p className="panorama-safety-copy">The virtual office does not show real obstacles. Start only in a clear area, keep your route unobstructed, and exit if you feel unsafe.</p>
+          <small>This product includes XR Engine software developed by Niantic Spatial, Inc. Spatial Studio is independent and not endorsed by Niantic Spatial. <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noreferrer">XR Engine License Agreement</a>.</small>
+          <div className="panorama-detail-actions"><button className="panorama-primary-action" onClick={()=>startPhysicalWalk()}>Start Physical Walk</button><button onClick={()=>{setWalkPreflightOpen(false);setPanoramaControlsExpanded(false);}}>Cancel</button></div>
+        </> : <>
+          <h2>{positionalXRActive?'Positional AR':physicalWalkDriveRequested?'Walk Info':'360° View'}</h2>
+          {positionalXRActive ? <>
+            <p>Camera passthrough is active. The virtual office hides real obstacles; use a clear area.</p>
+            <div className="panorama-detail-actions"><button onClick={recenterPositionalXR}>Recenter / Calibrate</button><button onClick={exitPositionalXR}>Exit Positional AR</button></div>
+          </> : physicalWalkDriveRequested ? <>
+            <p>The rear camera is used by XR Engine visual tracking; its live image is not shown. The virtual office hides real obstacles. Stay in a clear area and exit if you feel unsafe.</p>
+            <small>This product includes XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. The engine is provided as-is without warranties. Spatial Studio is independent and not endorsed by Niantic Spatial. <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noreferrer">XR Engine License Agreement</a>.</small>
+          </> : <>
+            <p>{panoramaInput==='motion'?'Motion mode uses the phone orientation sensor to look around.':'Touch mode: drag across the office to look around.'}</p>
+            {motionStatus&&<p className="panorama-detail-note">{motionStatus}</p>}
+            {physicalWalkError&&<p className="panorama-detail-note">{physicalWalkError}</p>}
+            {positionalXRError&&<p className="panorama-detail-note">{positionalXRError}</p>}
+            <div className="panorama-webxr-info">
+              <strong>WebXR Positional AR</strong>
+              {positionalXRSupport==='supported'?<><p>Available as a separate camera-passthrough AR mode, independent of 8th Wall Physical Walk. The office hides real obstacles; use a clear area.</p><button onClick={enterPositionalXR} disabled={!positionalXRBridgeReady}>Start Experimental Positional AR</button></>:positionalXRSupport==='checking'?<p>Checking WebXR immersive-ar support. This check does not determine 8th Wall Physical Walk availability.</p>:<p>WebXR immersive-ar is unavailable in this browser or device. This does not mean 8th Wall Physical Walk is unsupported; that feature checks XR8 separately when started.</p>}
+            </div>
+          </>}
+        </>}
+        {import.meta.env.DEV&&physicalWalkDriveRequested&&<div className="panorama-dev-diagnostics">
+          {walkDiagnostics&&<><b>XR8: {walkDiagnostics.engineLoaded?'loaded':'not loaded'} · camera {walkDiagnostics.cameraStreamInitialized?'ready':'not ready'} ({walkDiagnostics.cameraStatus})</b><span>{walkDiagnostics.trackingStatus}{walkDiagnostics.trackingReason?` · ${walkDiagnostics.trackingReason}`:''} · updates {walkDiagnostics.xrFrameCount} · origin {walkDiagnostics.originReady?'ready':'waiting'}</span><span>Pose {walkDiagnostics.poseAccepted?'accepted':'unavailable'} · {Number.isFinite(walkDiagnostics.rawPoseAgeMs)?walkDiagnostics.rawPoseAgeMs.toFixed(0):'—'} ms · {walkDiagnostics.rawPosition?.map(value=>value.toFixed(2)).join(', ')??'—'} · {walkDiagnostics.fps.toFixed(0)} FPS · {walkDiagnostics.collisionConstrained?'collision constrained':'clear'}</span></>}
+          <button onClick={()=>setWalkDiagnosticsOpen(value=>!value)} aria-expanded={walkDiagnosticsOpen}>Detailed stats</button>
+          {walkDiagnosticsOpen&&walkDiagnostics&&<div className="walk-debug-panel"><span>Reject: {walkDiagnostics.poseRejectionReason||'none'} · {walkDiagnostics.recoveryState}</span><span>Quaternion: {walkDiagnostics.rawOrientation?.map(value=>value.toFixed(3)).join(', ')??'—'}</span><span>Camera XYZ: {walkDiagnostics.appliedPosition.map(value=>value.toFixed(2)).join(', ')}</span><span>State seconds: {Object.entries(walkDiagnostics.stateSeconds).map(([name,seconds])=>`${name} ${seconds}s`).join(' · ')||'—'}</span><span>Rejected frames: {Object.entries(walkDiagnostics.rejectedFrames).map(([name,count])=>`${name} ${count}`).join(' · ')||'0'}</span></div>}
+        </div>}
+        <button className="panorama-collapse-link" onClick={()=>setPanoramaControlsExpanded(false)}>Close information</button>
+      </section>}
     </div>}
     {mobileExploring && view==='home' && !panoramaActive && <div className="wall-controls"><button aria-label="Previous wall" onClick={()=>navigateBy(-1)}>‹</button><span>{String(activeWall+1).padStart(2,'0')} / 04 · {WALL_GALLERY[activeWall].label}</span><button aria-label="Next wall" onClick={()=>navigateBy(1)}>›</button><button className="wall-recenter" onClick={recenter}>Recenter</button></div>}
     {musicInteracted && <aside className="gramophone-toast" role="status" aria-live="polite"><span>{musicMessage}</span>{gramophoneAudioAvailable&&<button className="music-mute" onClick={toggleMusicMute} aria-label={musicMuted?'Unmute gramophone':'Mute gramophone'}>{musicMuted?<VolumeX size={16}/>:<Volume2 size={16}/>}<span>{musicMuted?'Unmute':'Mute'}</span></button>}<button className="music-dismiss" onClick={()=>setMusicInteracted(false)} aria-label="Dismiss music status">×</button></aside>}

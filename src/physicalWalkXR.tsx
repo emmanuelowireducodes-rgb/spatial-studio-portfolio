@@ -7,15 +7,33 @@ import { constrainOfficeCameraPath } from './positionalXR';
 type Pose = { position: Vector3; rotation: Quaternion; status: string; reason: string };
 type XR8Module = {
   name: string;
-  XrController: { configure: (options: object) => void; pipelineModule: () => object };
+  XrController: { configure: (options: object) => void; pipelineModule: () => object; updateCameraProjectionMatrix: (options: {origin:{x:number;y:number;z:number};facing:{x:number;y:number;z:number;w:number}}) => void };
   XrConfig: { device: () => { MOBILE: unknown }; camera: () => { BACK: unknown } };
   addCameraPipelineModules: (modules: object[]) => void;
   run: (options: object) => void;
   stop: () => void;
+  version?: () => string;
 };
 export type PhysicalWalkBridge = { enter: (permissionsGranted?:boolean) => Promise<void>; exit: () => Promise<void>; recenter: () => void };
 export type PhysicalWalkDiagnostics = {
   engineLoaded:boolean;
+  engineVersion:string;
+  pipelineApiCompatible:boolean;
+  projectionCalibrated:boolean;
+  canvasConnected:boolean;
+  webglContextStatus:string;
+  videoDimensions:string;
+  pipelineCanvasDimensions:string;
+  runCalled:boolean;
+  latestSuccessfulStage:string;
+  stageAgeMs:number;
+  pipelineCallbackCount:number;
+  onUpdateCount:number;
+  renderedPoseCount:number;
+  realityPresent:boolean;
+  rawPoseFinite:boolean;
+  cameraFailureReason:string;
+  engineException:string;
   cameraStatus:string;
   cameraStreamInitialized:boolean;
   xrFrameCount:number;
@@ -33,6 +51,9 @@ export type PhysicalWalkDiagnostics = {
   renderLoop:string;
   trackingStatus:string;
   trackingReason:string;
+  trackingFrameCounts:Record<string,number>;
+  trackingStateDurationsSeconds:Record<string,number>;
+  trackingTransitions:Record<string,number>;
   poseValid:boolean;
   poseRejectionReason:string;
   recoveryState:string;
@@ -79,6 +100,14 @@ async function requestSensorPermissions() {
       throw new Error('Motion and orientation permission was not granted. Enable sensor access for this site and try again.');
     }
   }
+}
+
+function sanitizeDiagnosticText(value:string) {
+  return value
+    .replace(/https?:\/\/[^\s"'`]+/gi,'[URL]')
+    .replace(/\b(token|access[_ -]?key|api[_ -]?key|password|secret|authorization)(\s*[:=]\s*|\s+)[^\s,;]+/gi,'$1=[redacted]')
+    .replace(/[\r\n\t\u0000-\u001f]/g,' ')
+    .slice(0,240);
 }
 
 export function PhysicalWalkXRController({
@@ -137,7 +166,23 @@ export function PhysicalWalkXRController({
     let collisionConstrained = false;
     let trackingState = 'Waiting for camera';
     let engineLoaded = false;
+    let engineVersion = 'unknown';
+    let pipelineApiCompatible = false;
+    let projectionCalibrated = false;
+    let webglContextStatus = 'ready';
+    let videoDimensions = 'unavailable';
+    let pipelineCanvasDimensions = 'unavailable';
     let cameraStatus = 'not requested';
+    let cameraFailureReason = '';
+    let engineException = '';
+    let runCalled = false;
+    let latestSuccessfulStage = 'Not started';
+    let latestStageAt = performance.now();
+    let pipelineCallbackCount = 0;
+    let renderedPoseCount = 0;
+    let firstRenderSeen = false;
+    let realityPresent = false;
+    let rawPoseFinite = false;
     let xrFrameCount = 0;
     let lastRawPoseAt = 0;
     let hasRawPose = false;
@@ -149,6 +194,11 @@ export function PhysicalWalkXRController({
     let diagnosticsTimer = 0;
     let xrTrackingStatus = 'UNKNOWN';
     let xrTrackingReason = '';
+    let currentTrackingKey = '';
+    let currentTrackingKeySince = performance.now();
+    const trackingFrameCounts:Record<string,number> = {};
+    const trackingStateElapsedMs:Record<string,number> = {};
+    const trackingTransitions:Record<string,number> = {};
     let poseValid = false;
     let poseRejectionReason = '';
     let recoveryState = 'idle';
@@ -189,12 +239,29 @@ export function PhysicalWalkXRController({
       lastStatus = status;
       callbacksRef.current.onStatus(status);
     };
+    const markStage = (stage:string) => {
+      latestSuccessfulStage = stage;
+      latestStageAt = performance.now();
+    };
     const setTrackingState = (next:string) => {
       if (next === trackingState) return;
       const now = performance.now();
       stateElapsedMs[trackingState] = (stateElapsedMs[trackingState] || 0) + Math.max(0,now-trackingStateSince);
       trackingStateSince = now;
       trackingState = next;
+    };
+    const recordTrackingSample = (status:string,reason:string,now:number) => {
+      const stateKey=`${status}/${reason||'NONE'}`;
+      trackingFrameCounts[status]=(trackingFrameCounts[status]||0)+1;
+      if(stateKey!==currentTrackingKey) {
+        if(currentTrackingKey) {
+          trackingStateElapsedMs[currentTrackingKey]=(trackingStateElapsedMs[currentTrackingKey]||0)+Math.max(0,now-currentTrackingKeySince);
+          const transition=`${currentTrackingKey} -> ${stateKey}`;
+          trackingTransitions[transition]=(trackingTransitions[transition]||0)+1;
+        }
+        currentTrackingKey=stateKey;
+        currentTrackingKeySince=now;
+      }
     };
     const rejectPose = (reason:string, uiStatus:string) => {
       if(!poseUnavailableSince)poseUnavailableSince=performance.now();
@@ -227,7 +294,7 @@ export function PhysicalWalkXRController({
       return true;
     };
 
-    const publishDiagnostics = (now:number, rendered = false) => {
+    const publishDiagnostics = (now:number, rendered = false, force = false) => {
       if (!diagnosticsEnabledRef.current) {
         diagnosticsWasEnabled = false;
         renderFrames = 0;
@@ -242,10 +309,27 @@ export function PhysicalWalkXRController({
         lastDiagnosticsAt = now;
       }
       if(rendered)renderFrames += 1;
-      if (now - lastDiagnosticsAt < 400) return;
+      if (!force && now - lastDiagnosticsAt < 400) return;
       const elapsed = rateWindowAt ? Math.max(1,now-rateWindowAt) : 400;
       callbacksRef.current.onDiagnostics({
         engineLoaded,
+        engineVersion,
+        pipelineApiCompatible,
+        projectionCalibrated,
+        canvasConnected:gl.domElement.isConnected,
+        webglContextStatus,
+        videoDimensions,
+        pipelineCanvasDimensions,
+        runCalled,
+        latestSuccessfulStage,
+        stageAgeMs:Math.max(0,now-latestStageAt),
+        pipelineCallbackCount,
+        onUpdateCount:xrFrameCount,
+        renderedPoseCount,
+        realityPresent,
+        rawPoseFinite,
+        cameraFailureReason,
+        engineException,
         cameraStatus,
         cameraStreamInitialized:cameraStatus==='hasStream'||cameraStatus==='hasVideo',
         xrFrameCount,
@@ -263,6 +347,9 @@ export function PhysicalWalkXRController({
         renderLoop:'XR8 onRender → R3F advance (single canvas)',
         trackingStatus:xrTrackingStatus,
         trackingReason:xrTrackingReason,
+        trackingFrameCounts:{...trackingFrameCounts},
+        trackingStateDurationsSeconds:Object.fromEntries(Object.entries({...trackingStateElapsedMs,...(currentTrackingKey?{[currentTrackingKey]:(trackingStateElapsedMs[currentTrackingKey]||0)+Math.max(0,now-currentTrackingKeySince)}:{})}).map(([key,value])=>[key,Math.round(value/100)/10])),
+        trackingTransitions:{...trackingTransitions},
         poseValid,
         poseRejectionReason,
         recoveryState,
@@ -276,28 +363,67 @@ export function PhysicalWalkXRController({
     };
     const startStartupWatchdog = () => {
       if(startupTimer)window.clearTimeout(startupTimer);
-      startupTimer=window.setTimeout(()=>{
+      const inspectStartup = () => {
         if(!runRequested)return;
-        if(!active)publishStatus('XR8 camera pipeline did not start. Try Again or use Touch Mode.');
-        else if(xrFrameCount===0)publishStatus('Camera state received no XR8 tracking updates. Try Again or use Touch Mode.');
-        else if(!trackingUsable)publishStatus(`XR8 ${xrTrackingStatus}${xrTrackingReason?` (${xrTrackingReason})`:''} has not supplied a usable pose. Try Again or use Touch Mode.`);
-      },15000);
+        const elapsed=performance.now()-latestStageAt;
+        if(cameraStatus==='requesting') {
+          if(elapsed>45000)publishStatus('Camera permission is still pending. Check the browser prompt, then Try Again or use Touch Mode.');
+          else publishStatus('Waiting for camera permission…');
+        } else if(cameraStatus==='hasStream'&&elapsed>25000) publishStatus('Camera opened but video frames have not started. Try Again or use Touch Mode.');
+        else if(cameraStatus==='hasVideo'&&!active&&elapsed>30000) publishStatus('Camera video is ready, but XR8 has not started the tracking pipeline. Try Again or use Touch Mode.');
+        else if(!cameraStatus.includes('has')&&elapsed>30000) publishStatus(`XR8 startup stopped after “${latestSuccessfulStage}”. Try Again or use Touch Mode.`);
+        else if(active&&xrFrameCount===0&&elapsed>20000) publishStatus('XR8 started, but no tracking frames arrived. Try Again or use Touch Mode.');
+        else if(xrFrameCount>0&&!realityPresent&&elapsed>20000) publishStatus('XR8 frames arrived without world tracking data. Try Again or use Touch Mode.');
+        else if(realityPresent&&xrTrackingStatus!=='NORMAL'&&elapsed>20000) publishStatus(`XR8 tracking is ${xrTrackingStatus}${xrTrackingReason?` (${xrTrackingReason})`:''}. Try Again or use Touch Mode.`);
+        else if(realityPresent&&!trackingUsable&&elapsed>20000) publishStatus(`XR8 pose rejected${poseRejectionReason?`: ${poseRejectionReason}`:''}. Try Again or use Touch Mode.`);
+        if(runRequested)startupTimer=window.setTimeout(inspectStartup,1000);
+      };
+      startupTimer=window.setTimeout(inspectStartup,1000);
     };
 
     const poseModule = {
       name: 'spatial-studio-physical-walk',
-      onCameraStatusChange: ({status}: {status:string}) => {
+      onBeforeRun: () => {
+        pipelineCallbackCount+=1;
+        markStage('onBeforeRun');
+      },
+      onCameraStatusChange: ({status,video}: {status:string;video?:HTMLVideoElement}) => {
+        pipelineCallbackCount+=1;
         cameraStatus=status;
+        if(video?.videoWidth&&video?.videoHeight)videoDimensions=`${video.videoWidth}×${video.videoHeight}`;
+        markStage(`Camera ${status}`);
+        if(status!=='failed')cameraFailureReason='';
         if (status === 'requesting') publishStatus('Waiting for camera permission…');
         else if (status === 'hasStream') publishStatus('Camera permission granted; starting visual tracking…');
         else if (status === 'hasVideo') publishStatus('Camera active; locating the office origin…');
         else if (status === 'failed') {
+          cameraFailureReason='XR8 reported camera status failed; no additional camera reason was provided.';
+          publishDiagnostics(performance.now(),false,true);
           callbacksRef.current.onError('The browser could not start the rear camera. Check the site camera permission and close other camera apps, then try again.');
           void stopEngine();
         }
       },
       onStart: () => {
+        pipelineCallbackCount+=1;
+        markStage('onStart');
         if (disposed || !requestedRef.current || !runRequested) { void stopEngine(); return; }
+        try {
+          camera.updateMatrixWorld(true);
+          xr8?.XrController.updateCameraProjectionMatrix({
+            origin:{x:camera.position.x,y:camera.position.y,z:camera.position.z},
+            facing:{x:camera.quaternion.x,y:camera.quaternion.y,z:camera.quaternion.z,w:camera.quaternion.w},
+          });
+          projectionCalibrated=true;
+          markStage('XR8 camera projection synchronized');
+        } catch(error) {
+          const message=error instanceof Error?`${error.name}: ${error.message}`:String(error||'Camera projection synchronization failed.');
+          engineException=sanitizeDiagnosticText(message);
+          markStage('XR8 camera projection synchronization failed');
+          publishDiagnostics(performance.now(),false,true);
+          callbacksRef.current.onError('Physical Walk could not calibrate its camera view. Return to Touch Mode or try again.');
+          void stopEngine();
+          return;
+        }
         active = true;
         limitedSince=0;
         cameraControl.physicalWalkActive = true;
@@ -318,8 +444,15 @@ export function PhysicalWalkXRController({
         callbacksRef.current.onActiveChange(true);
         publishStatus('Tracking starting… keep the phone on a detailed, well-lit view.');
       },
+      onAttach: ({videoWidth,videoHeight,canvasWidth,canvasHeight}: {videoWidth?:number;videoHeight?:number;canvasWidth?:number;canvasHeight?:number}) => {
+        pipelineCallbackCount+=1;
+        if(videoWidth&&videoHeight)videoDimensions=`${videoWidth}×${videoHeight}`;
+        if(canvasWidth&&canvasHeight)pipelineCanvasDimensions=`${canvasWidth}×${canvasHeight}`;
+        markStage('onAttach');
+      },
       onCanvasSizeChange: ({canvasWidth,canvasHeight}: {canvasWidth:number;canvasHeight:number}) => {
         if (canvasWidth <= 0 || canvasHeight <= 0) return;
+        pipelineCanvasDimensions=`${canvasWidth}×${canvasHeight}`;
         // XR8 resizes its tracking canvas. Keep the existing R3F renderer and camera projection in sync.
         gl.setPixelRatio(1);
         gl.setSize(canvasWidth,canvasHeight,false);
@@ -327,17 +460,27 @@ export function PhysicalWalkXRController({
         perspective.aspect = canvasWidth / canvasHeight;
         perspective.updateProjectionMatrix();
       },
+      onVideoSizeChange: ({videoWidth,videoHeight}: {videoWidth:number;videoHeight:number}) => {
+        if(videoWidth>0&&videoHeight>0)videoDimensions=`${videoWidth}×${videoHeight}`;
+      },
       onUpdate: ({processCpuResult}: {processCpuResult?: {reality?: {position?: {x:number;y:number;z:number}; rotation?: {x:number;y:number;z:number;w:number}; trackingStatus?: string; trackingReason?: string}}}) => {
+        pipelineCallbackCount+=1;
         xrFrameCount+=1;
         const reality = processCpuResult?.reality;
+        const now = performance.now();
+        if(xrFrameCount===1)markStage('First onUpdate');
+        if(reality&&!realityPresent)markStage('First processCpuResult.reality');
+        realityPresent=!!reality;
+        rawPoseFinite=false;
         const position = reality?.position;
         const rotation = reality?.rotation;
-        const now = performance.now();
         const status = reality?.trackingStatus || 'UNKNOWN';
         const reason = reality?.trackingReason || '';
         xrTrackingStatus = status;
         xrTrackingReason = reason;
+        recordTrackingSample(status,reason,now);
         if(position&&rotation){
+          rawPoseFinite=[position.x,position.y,position.z,rotation.x,rotation.y,rotation.z,rotation.w].every(Number.isFinite);
           rawPosition.set(position.x,position.y,position.z);
           rawRotation.set(rotation.x,rotation.y,rotation.z,rotation.w);
           hasRawPose=true;
@@ -461,6 +604,8 @@ export function PhysicalWalkXRController({
         publishStatus(collisionConstrained?'Movement blocked by furniture':`Tracking normally · translation ${sensitivity.toFixed(1)}×`);
       },
       onRender: () => {
+        pipelineCallbackCount+=1;
+        if(!firstRenderSeen){firstRenderSeen=true;markStage('First onRender');}
         if (!active || !requestedRef.current) return;
         const now = performance.now();
         if (suspendedRef.current) {
@@ -496,6 +641,7 @@ export function PhysicalWalkXRController({
             collisionConstrained = candidatePosition.distanceToSquared(constrainedPosition) > .0004;
             camera.position.copy(constrainedPosition);
             camera.quaternion.copy(xrToOffice).multiply(filteredRotation);
+            renderedPoseCount+=1;
             camera.updateMatrixWorld(true);
             cameraControl.currentQuaternion.copy(camera.quaternion);
             cameraEuler.setFromQuaternion(camera.quaternion,'YXZ');
@@ -512,16 +658,21 @@ export function PhysicalWalkXRController({
         advance(performance.now());
         publishDiagnostics(performance.now(),true);
       },
-      onException: ({exception}: {exception?: unknown}) => {
-        const message = exception instanceof Error ? exception.message : String(exception || 'Unknown XR runtime error.');
-        callbacksRef.current.onError(`Physical Walk stopped: ${message}`);
+      onException: (error: unknown) => {
+        pipelineCallbackCount+=1;
+        markStage('onException');
+        const errorObject=error&&typeof error==='object'?error as {name?:unknown;message?:unknown}:null;
+        const rawMessage=error instanceof Error?`${error.name}: ${error.message}`:typeof errorObject?.message==='string'?`${typeof errorObject.name==='string'?`${errorObject.name}: `:''}${errorObject.message}`:String(error||'Unknown XR runtime error.');
+        engineException=sanitizeDiagnosticText(rawMessage);
+        publishDiagnostics(performance.now(),false,true);
+        callbacksRef.current.onError('Physical Walk could not initialize. Use Try Again or return to Touch Mode.');
         void stopEngine();
       },
     };
 
     async function stopEngine() {
       if (startupTimer) { window.clearTimeout(startupTimer); startupTimer=0; }
-      if (active || runRequested) {
+        if (active || runRequested) {
         active = false;
         runRequested = false;
         trackingUsable = false;
@@ -554,9 +705,26 @@ export function PhysicalWalkXRController({
       callbacksRef.current.onActiveChange(false);
     }
 
+    const onWebglContextLost = (event:Event) => {
+      event.preventDefault();
+      webglContextStatus='lost';
+      engineException='WebGL context lost while Physical Walk was starting or running.';
+      markStage('WebGL context lost');
+      publishDiagnostics(performance.now(),false,true);
+      callbacksRef.current.onError('Physical Walk lost its graphics context. Return to Touch Mode or try again.');
+      void stopEngine();
+    };
+    const onWebglContextRestored = () => {
+      webglContextStatus='restored; restart required';
+      markStage('WebGL context restored');
+      publishDiagnostics(performance.now(),false,true);
+    };
+    gl.domElement.addEventListener('webglcontextlost',onWebglContextLost);
+    gl.domElement.addEventListener('webglcontextrestored',onWebglContextRestored);
+
     const bridge: PhysicalWalkBridge = {
       enter: async (permissionsGranted = false) => {
-        if (active || disposed) return;
+        if (active || runRequested || disposed) return;
         if (!window.isSecureContext) throw new Error('Physical Walk requires this portfolio to be opened over HTTPS.');
         if (gl.xr.isPresenting) throw new Error('Exit the current positional AR session before starting Physical Walk.');
         const permissionRequest = permissionsGranted ? Promise.resolve() : requestSensorPermissions();
@@ -564,20 +732,70 @@ export function PhysicalWalkXRController({
         await permissionRequest;
         if (disposed || !requestedRef.current) return;
         engineLoaded=false;
+        engineVersion='unknown';
+        pipelineApiCompatible=false;
+        webglContextStatus='ready';
+        runCalled=false;
+        latestSuccessfulStage='Loading XR8 script';
+        latestStageAt=performance.now();
+        pipelineCallbackCount=0;
+        renderedPoseCount=0;
+        firstRenderSeen=false;
+        xrFrameCount=0;
+        realityPresent=false;
+        rawPoseFinite=false;
+        projectionCalibrated=false;
+        videoDimensions='unavailable';
+        pipelineCanvasDimensions='unavailable';
+        currentTrackingKey='';
+        currentTrackingKeySince=performance.now();
+        for(const key of Object.keys(trackingFrameCounts))delete trackingFrameCounts[key];
+        for(const key of Object.keys(trackingStateElapsedMs))delete trackingStateElapsedMs[key];
+        for(const key of Object.keys(trackingTransitions))delete trackingTransitions[key];
+        cameraFailureReason='';
+        engineException='';
         cameraStatus='requesting';
-        xr8 = await loadXR8();
+        try {
+          xr8 = await loadXR8();
+        } catch(error) {
+          const message=error instanceof Error?`${error.name}: ${error.message}`:String(error||'XR8 script loading failed.');
+          engineException=sanitizeDiagnosticText(message);
+          markStage('XR8 script load failed');
+          publishDiagnostics(performance.now(),false,true);
+          throw error;
+        }
         engineLoaded=true;
+        try { engineVersion=xr8.version?.()||'unknown'; } catch { engineVersion='unavailable'; }
+        markStage('XR8 script loaded');
         if (disposed || !requestedRef.current) return;
         if (!modulesRegistered) {
-          xr8.XrController.configure({disableWorldTracking:false,leftHandedAxes:false,scale:'absolute'});
-          xr8.addCameraPipelineModules([xr8.XrController.pipelineModule(),poseModule]);
+          try {
+            if(!xr8.run||!xr8.stop||!xr8.XrConfig?.device||!xr8.XrConfig?.camera)throw new Error('Loaded XR8 engine is missing a required run, stop, or camera configuration API.');
+            if(!xr8.XrController?.pipelineModule)throw new Error('The loaded XR8 engine does not expose XrController.pipelineModule().');
+            if(!xr8.XrController?.updateCameraProjectionMatrix)throw new Error('The loaded XR8 engine does not expose XrController.updateCameraProjectionMatrix().');
+            if(!xr8.addCameraPipelineModules)throw new Error('The loaded XR8 engine does not expose addCameraPipelineModules().');
+            pipelineApiCompatible=true;
+            if(!gl.domElement.isConnected)throw new Error('The existing React Three Fiber canvas is not attached to the document.');
+            if(gl.getContext().isContextLost())throw new Error('The existing React Three Fiber WebGL context is already lost.');
+            xr8.XrController.configure({disableWorldTracking:false,leftHandedAxes:false,scale:'absolute'});
+            xr8.addCameraPipelineModules([xr8.XrController.pipelineModule(),poseModule]);
+          } catch(error) {
+            const message=error instanceof Error?`${error.name}: ${error.message}`:String(error||'XR8 pipeline registration failed.');
+            engineException=sanitizeDiagnosticText(message);
+            markStage('Pipeline module registration failed');
+            publishDiagnostics(performance.now(),false,true);
+            throw error;
+          }
           modulesRegistered = true;
+          markStage('Pipeline modules registered');
         }
         cameraControl.physicalWalkActive = true;
         gl.setPixelRatio(1);
         cameraStatus='starting';
         publishStatus('Opening rear camera and starting 8th Wall visual tracking…');
         runRequested = true;
+        runCalled=true;
+        markStage('XR8.run called');
         startStartupWatchdog();
         try {
           xr8.run({
@@ -589,6 +807,9 @@ export function PhysicalWalkXRController({
           });
         } catch (error) {
           runRequested = false;
+          cameraFailureReason=sanitizeDiagnosticText(error instanceof Error?error.message:String(error||'XR8.run failed.'));
+          engineException=cameraFailureReason;
+          publishDiagnostics(performance.now(),false,true);
           cameraControl.physicalWalkActive = false;
           try { xr8.stop(); } catch { /* Keep the gallery available if startup partially initialized. */ }
           throw error;
@@ -604,6 +825,8 @@ export function PhysicalWalkXRController({
     return () => {
       disposed = true;
       if(diagnosticsTimer)window.clearInterval(diagnosticsTimer);
+      gl.domElement.removeEventListener('webglcontextlost',onWebglContextLost);
+      gl.domElement.removeEventListener('webglcontextrestored',onWebglContextRestored);
       bridgeRef.current = null;
       callbacksRef.current.onBridgeReady(false);
       if (active || runRequested) void stopEngine();

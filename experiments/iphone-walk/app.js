@@ -29,6 +29,11 @@ let firstPoseComparisonLogged = false;
 let poseTimer = 0;
 let rendererTimer = 0;
 let updateCount = 0;
+const trackingFrameCounts = Object.create(null);
+const trackingStateDurationsMs = Object.create(null);
+const trackingTransitions = Object.create(null);
+let currentTrackingKey = '';
+let currentTrackingKeyAt = 0;
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('xr-canvas');
@@ -52,6 +57,28 @@ function setDiagnostic(key, state, detail) {
     row.append(description);
   }
   description.textContent = detail || '';
+}
+
+function recordTrackingState(status, reason, now) {
+  const key = `${status}/${reason || 'NONE'}`;
+  trackingFrameCounts[status] = (trackingFrameCounts[status] || 0) + 1;
+  if (key === currentTrackingKey) return;
+  if (currentTrackingKey) {
+    trackingStateDurationsMs[currentTrackingKey] = (trackingStateDurationsMs[currentTrackingKey] || 0) + Math.max(0, now - currentTrackingKeyAt);
+    const transition = `${currentTrackingKey} -> ${key}`;
+    trackingTransitions[transition] = (trackingTransitions[transition] || 0) + 1;
+  }
+  currentTrackingKey = key;
+  currentTrackingKeyAt = now;
+}
+
+function trackingSummary(now = performance.now()) {
+  const durations = {...trackingStateDurationsMs};
+  if (currentTrackingKey) durations[currentTrackingKey] = (durations[currentTrackingKey] || 0) + Math.max(0, now - currentTrackingKeyAt);
+  const counts = Object.entries(trackingFrameCounts).map(([state, count]) => `${state} ${count}`).join(' · ') || 'none';
+  const elapsed = Object.entries(durations).map(([state, ms]) => `${state} ${(ms / 1000).toFixed(1)}s`).join(' · ') || 'none';
+  const transitions = Object.entries(trackingTransitions).map(([state, count]) => `${state} ×${count}`).join(' · ') || 'none';
+  return `Frames: ${counts} | Time: ${elapsed} | Changes: ${transitions}`;
 }
 
 function failStage(key, message, stageMessage = message) {
@@ -466,6 +493,8 @@ const readTracking = {
       rotation: {x:reality.rotation.x, y:reality.rotation.y, z:reality.rotation.z, w:reality.rotation.w},
     };
     const trackingStatus = reality.trackingStatus || 'UNKNOWN';
+    const now = performance.now();
+    recordTrackingState(trackingStatus, reality.trackingReason || '', now);
     const initializing = reality.trackingReason === 'INITIALIZING';
     const limited = trackingStatus !== 'NORMAL' || initializing;
     lastTrackingUsable = !limited;
@@ -483,9 +512,10 @@ const readTracking = {
       pulse.className = `pulse ${limited ? 'limited' : 'live'}`;
     }
 
-    const now = performance.now();
     if (now - lastHudUpdateAt >= 100) {
       updatePoseDiagnostics(reality, cameraWorld);
+      const trackingSummaryNode = $('tracking-state-value');
+      if (trackingSummaryNode) trackingSummaryNode.textContent = trackingSummary(now);
       setValue('qx-value', latestPose.rotation.x);
       setValue('qy-value', latestPose.rotation.y);
       setValue('qz-value', latestPose.rotation.z);
@@ -498,8 +528,8 @@ const readTracking = {
     renderFrameCount += 1;
     publishFrameRates(performance.now());
   },
-  onException: ({exception}) => {
-    const detail = readableError(exception);
+  onException: (error) => {
+    const detail = readableError(error);
     const failedKey = office ? 'pipeline' : 'renderer';
     failStage(failedKey, `The XR engine reported a runtime exception: ${detail}`, detail);
   },
