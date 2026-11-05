@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#10141b" />
+    <meta name="description" content="Isolated iPhone Safari camera based positional tracking prototype." />
+    <title>Spatial Studio · Physical Walk Prototype</title>
+    <!-- This product includes the XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. License: https://github.com/8thwall/engine/blob/main/LICENSE -->
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./diagnostics.css" />
+    <script>
+      (() => {
+        const sdk = {state: 'loading', error: null, promise: null};
+        let resolveSdk;
+        let rejectSdk;
+        sdk.promise = new Promise((resolve, reject) => { resolveSdk = resolve; rejectSdk = reject; });
+        sdk.promise.catch(() => {}); // Prevent an early CDN error from becoming unhandled before the module boots.
+        window.__physicalWalkSdk = sdk;
+
+        let settled = false;
+        const ready = () => {
+          if (settled) return;
+          if (!window.XR8) return failed('The SDK signalled readiness but window.XR8 is missing.');
+          settled = true;
+          sdk.state = 'ready';
+          resolveSdk(window.XR8);
+        };
+        function failed(message) {
+          if (settled) return;
+          settled = true;
+          sdk.state = 'failed';
+          sdk.error = message;
+          rejectSdk(new Error(message));
+        }
+
+        window.addEventListener('xrloaded', ready, {once: true});
+        const script = document.createElement('script');
+        script.id = 'xr8-engine-script';
+        script.src = 'https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/xr.js';
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.dataset.preloadChunks = 'slam';
+        script.addEventListener('load', () => {
+          if (!settled) sdk.state = 'script-loaded';
+          if (window.XR8) ready();
+        }, {once: true});
+        script.addEventListener('error', () => failed('Could not download the 8th Wall XR Engine from jsDelivr. Check the network, content blocker, or site Content-Security-Policy.'), {once: true});
+        document.head.appendChild(script);
+
+        window.setTimeout(() => {
+          if (!settled) failed(sdk.state === 'script-loaded'
+            ? 'The XR Engine script downloaded but did not signal xrloaded or expose window.XR8.'
+            : 'Timed out while downloading the XR Engine script from jsDelivr.');
+        }, 20000);
+      })();
+    </script>
+    <script type="importmap">
+      {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js"}}
+    </script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="back" href="/">Spatial Studio</a>
+        <span class="tag">EXPERIMENTAL · IPHONE SAFARI</span>
+      </header>
+
+      <section class="intro" aria-labelledby="title">
+        <p class="eyebrow">CAMERA-ASSISTED POSITIONAL TRACKING</p>
+        <h1 id="title">Physical Walk<br /><em>Prototype</em></h1>
+        <p class="lede">Move the phone through a clear area. The readout reports the visual tracker’s measured position and orientation; it does not estimate steps from motion sensors.</p>
+      </section>
+
+      <section class="safety" aria-label="Safety reminder">
+        <span class="safety-icon" aria-hidden="true">!</span>
+        <p><strong>Use only in a clear, safe area.</strong> This virtual office does not show your surroundings. Keep the phone and your path away from people, furniture, walls, stairs, and other obstacles.</p>
+      </section>
+
+      <section class="stage" aria-label="Tracked virtual office">
+        <canvas id="xr-canvas" aria-label="Opaque virtual room rendered from the tracked phone pose"></canvas>
+        <div class="stage-label"><span class="pulse" id="pulse"></span><span id="stage-status">Waiting for you to start</span></div>
+      </section>
+        <div class="pose" aria-live="polite">
+          <p class="pose-heading">RAW TRACKED XYZ <span>(metres)</span></p>
+          <div class="coords"><span>X <b id="raw-x-value">—</b></span><span>Y <b id="raw-y-value">—</b></span><span>Z <b id="raw-z-value">—</b></span></div>
+          <p class="pose-heading rotation-heading">EFFECTIVE CAMERA XYZ <span>(translation gain applied)</span></p>
+          <div class="coords"><span>X <b id="camera-x-value">—</b></span><span>Y <b id="camera-y-value">—</b></span><span>Z <b id="camera-z-value">—</b></span></div>
+          <div class="distance-readout"><span>FRONT DISPLAY DISTANCE (m)</span><b id="distance-value">—</b></div>
+          <div class="distance-readout movement-readout"><span>TRACKED / APPLIED TRAVEL FROM RECENTER</span><b id="movement-value">— / — m</b><small id="scale-value">Waiting for 30 cm movement check</small></div>
+          <p class="pose-heading rotation-heading">ORIENTATION <span>(quaternion)</span></p>
+          <div class="coords rotation"><span>X <b id="qx-value">—</b></span><span>Y <b id="qy-value">—</b></span><span>Z <b id="qz-value">—</b></span><span>W <b id="qw-value">—</b></span></div>
+        </div>
+
+      <section class="controls" aria-label="Tracking controls">
+        <div id="engine-status" class="engine-status" role="status">Checking browser support…</div>
+        <label class="sensitivity-control" for="position-scale">
+          <span>POSITIONAL RESPONSE <small>translation from Recenter only</small></span>
+          <select id="position-scale" aria-label="Positional sensitivity">
+            <option value="1">1× Natural</option>
+            <option value="1.5" selected>1.5× Responsive</option>
+            <option value="2">2× Enhanced</option>
+          </select>
+        </label>
+        <ul class="diagnostics" aria-label="Startup diagnostics">
+          <li data-diagnostic="context"><span>Secure camera context</span><b>Checking</b></li>
+          <li data-diagnostic="capabilities"><span>Browser capabilities</span><b>Checking</b></li>
+          <li data-diagnostic="sdk"><span>8th Wall SDK script</span><b>Checking</b></li>
+          <li data-diagnostic="api"><span>XR8 runtime</span><b>Checking</b></li>
+          <li data-diagnostic="three"><span>Three.js bridge</span><b>Checking</b></li>
+          <li data-diagnostic="pipeline"><span>XR pipeline</span><b>Waiting</b></li>
+          <li data-diagnostic="camera"><span>Camera permission and frames</span><b>Waiting</b></li>
+          <li data-diagnostic="renderer"><span>3D renderer</span><b>Waiting</b></li>
+          <li data-diagnostic="pose"><span>6DoF pose updates</span><b>Waiting</b></li>
+          <li data-diagnostic="performance"><span>Render and pose rate</span><b>Measuring</b><small id="performance-value">Render FPS and valid XR pose updates per second will appear here.</small></li>
+        </ul>
+        <div class="buttons">
+          <button id="start-button" class="primary" type="button" disabled>Start Physical Walk</button>
+          <button id="recenter-button" type="button" disabled>Recenter</button>
+          <button id="stop-button" class="stop" type="button" disabled>Stop / Exit</button>
+        </div>
+        <p id="error-message" class="error" role="alert" hidden></p>
+      </section>
+
+      <details class="notes">
+        <summary>What this prototype measures</summary>
+        <p>The 8th Wall XR Engine SLAM pipeline provides a tracked camera position (x/y/z) and orientation quaternion (x/y/z/w), plus a tracking status. Position is relative to a session origin and may drift or become limited when the scene lacks visual detail. This is a technology evaluation, not a safety or navigation tool.</p>
+        <p>The camera stream is passed to the tracking engine. This page does not add the camera-feed renderer or a video background; the Three.js scene is configured as opaque. Confirm this behavior on a physical iPhone before relying on it.</p>
+        <p class="license">This product includes XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. The XR Engine is distributed under the <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noreferrer">XR Engine License Agreement</a>. The 8th Wall open-source MIT framework does not include SLAM.</p>
+      </details>
+      <footer>Independent prototype; not affiliated with or endorsed by Niantic Spatial.</footer>
+    </main>
+  </body>
+</html>
